@@ -128,17 +128,15 @@ PROMPT_POLISH_BASE = """你是一名顶尖的播客文字整理编辑。任务�
 
 直接输出整理后的正文，不要任何开场白、说明或结尾总结。"""
 
-# 四档风格，按"清洗强度从弱到强"排列；越弱越保留原声/口癖
+# 只保留两档，对应清洗强度的两端，含义直观、无需纠结
 POLISH_STYLES = {
-    "voiced": "【风格】保留原声（轻清洗）：只去掉纯粹的填充词和结巴重来，最大限度保留口语原貌、口头禅、语气和节奏，尽量贴近『他本人在说话』。适合还原表达风格、或作为人格化对话的语料。",
-    "faithful": "【风格】贴近原话：在书面化的同时最大程度保留原有的表达方式、口吻和具体例子。",
-    "readable": "【风格】深度可读：在不丢任何信息的前提下，让行文更像一篇结构清晰、逻辑连贯的文章——多用小标题、适当补充过渡句。",
-    "concise": "【风格】精炼留干货：在不丢失任何信息点的前提下，表达尽量紧凑，去掉铺垫和啰嗦，但不得删除实质内容。",
+    "voiced": "【风格】保留原声（轻清洗）：只去掉纯粹的填充词和结巴重来，最大限度保留口语原貌、口头禅、语气、节奏和具体例子，尽量贴近『他本人在说话』。",
+    "readable": "【风格】深度整理：在不丢任何信息的前提下，把内容整理成结构清晰、逻辑连贯、好读的文章——合理分段、用小标题分节、适当补充过渡句。",
 }
 
 
-def prompt_polish(style: str = "faithful") -> str:
-    extra = POLISH_STYLES.get(style, POLISH_STYLES["faithful"])
+def prompt_polish(style: str = "voiced") -> str:
+    extra = POLISH_STYLES.get(style, POLISH_STYLES["voiced"])
     return PROMPT_POLISH_BASE + "\n\n" + extra
 
 PROMPT_SUMMARY_MAP = (
@@ -317,7 +315,7 @@ async def api_process(
     mode: str = Body(..., embed=True),
     target_lang: str = Body("英文", embed=True),
     high_fidelity: bool = Body(False, embed=True),
-    style: str = Body("faithful", embed=True),
+    style: str = Body("voiced", embed=True),
 ):
     """流式处理：以 NDJSON（每行一个 JSON）逐步返回进度，最后一行是结果。
     前端边读边显示『第 k/N 块』。"""
