@@ -27,11 +27,19 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "").strip()
 
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-DEEPSEEK_MODEL = "deepseek-chat"
+# DeepSeek V4：deepseek-v4-flash(便宜快) / deepseek-v4-pro(更强)，
+# 两者都是 1M 上下文、384K 输出帽。旧别名 deepseek-chat 只有 8K 输出且将弃用，已不用。
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
 
-# 每个分块的大致字数上限。播客长稿会被切成若干这么大的块，逐块处理。
-# 调小 -> 更稳但更慢更费；调大 -> 更快，但太大可能超出模型单次输出长度。
-CHUNK_CHARS = 3500
+# 单次输出上限。V4 实际可达 384K，这里设一个够覆盖单块、又不过分的值即可。
+DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
+
+# 每个分块的大致字数上限。书面化是 1:1 改写，输出≈输入，所以块由两头夹定：
+#   上限——别让单块输出超过 max_tokens；下限——块越小越不容易"偷懒漏内容"。
+# V4 输出帽很大，截断已不是威胁，所以默认块比旧版大很多，拼接缝更少。
+CHUNK_CHARS = int(os.getenv("CHUNK_CHARS", "6000"))        # 普通模式
+HIFI_CHUNK_CHARS = int(os.getenv("HIFI_CHUNK_CHARS", "3000"))  # 高保真模式(更小块更准)
+CONTEXT_TAIL = int(os.getenv("CONTEXT_TAIL", "400"))       # 传给下一块的衔接字数
 
 app = FastAPI(title="Hipodcast MVP")
 
@@ -39,22 +47,35 @@ app = FastAPI(title="Hipodcast MVP")
 # --------------------------------------------------------------------------
 # 工具：把长文本按句子边界切成若干块
 # --------------------------------------------------------------------------
+def _split_sentences(text: str):
+    """按中英文句末标点切句（保留标点）。"""
+    return [p for p in re.split(r"(?<=[。！？!?\.])\s*", text) if p]
+
+
 def split_into_chunks(text: str, max_chars: int = CHUNK_CHARS):
-    """按中英文句末标点切句，再把句子拼成不超过 max_chars 的块。"""
+    """优先按段落切，段落过大再按句子切，最后拼成不超过 max_chars 的块。
+    尽量在自然边界（段落/句子）断开，避免把一句话切两半。"""
     text = text.strip()
     if not text:
         return []
-    # 在句末标点后插入分割点（保留标点）
-    parts = re.split(r"(?<=[。！？!?\.\n])", text)
-    chunks, buf = [], ""
-    for p in parts:
-        if not p:
-            continue
-        if len(buf) + len(p) > max_chars and buf:
-            chunks.append(buf)
-            buf = p
+    # 先按段落（空行或换行）拆成基本单元
+    paragraphs = [p for p in re.split(r"\n\s*\n|\n", text) if p.strip()]
+    units = []
+    for para in paragraphs:
+        if len(para) <= max_chars:
+            units.append(para)
         else:
-            buf += p
+            # 段落本身就超长 -> 退化到按句子切
+            units.extend(_split_sentences(para))
+
+    chunks, buf = [], ""
+    for u in units:
+        sep = "\n" if buf else ""
+        if len(buf) + len(sep) + len(u) > max_chars and buf:
+            chunks.append(buf)
+            buf = u
+        else:
+            buf += sep + u
     if buf.strip():
         chunks.append(buf)
     return chunks
@@ -79,6 +100,7 @@ async def deepseek_chat(system_prompt: str, user_content: str) -> str:
             {"role": "user", "content": user_content},
         ],
         "temperature": 0.3,
+        "max_tokens": DEEPSEEK_MAX_TOKENS,  # 显式设大，避免默认值把长输出截断
         "stream": False,
     }
     async with httpx.AsyncClient(timeout=300) as client:
@@ -123,10 +145,14 @@ def prompt_translate(target_lang: str) -> str:
 # --------------------------------------------------------------------------
 # 核心：分段加工
 # --------------------------------------------------------------------------
-async def process_polish_or_translate(text: str, system_prompt: str) -> dict:
-    """书面化 / 翻译：逐块处理，带上一块结尾做衔接，再拼接。"""
-    chunks = split_into_chunks(text)
+async def process_polish_or_translate(
+    text: str, system_prompt: str, max_chars: int, check_fidelity: bool = False
+) -> dict:
+    """书面化 / 翻译：逐块处理，带上一块结尾做衔接，再拼接。
+    check_fidelity=True 时（书面化）顺便比对每块输入/输出字数，疑似漏内容就警告。"""
+    chunks = split_into_chunks(text, max_chars)
     results = []
+    warnings = []
     prev_tail = ""
     for i, chunk in enumerate(chunks):
         if prev_tail:
@@ -138,13 +164,19 @@ async def process_polish_or_translate(text: str, system_prompt: str) -> dict:
             user_content = chunk
         out = await deepseek_chat(system_prompt, user_content)
         results.append(out)
-        prev_tail = out[-200:]
-    return {"result": "\n\n".join(results), "chunks": len(chunks)}
+        prev_tail = out[-CONTEXT_TAIL:]
+        # 书面化是 1:1 改写，输出明显短于输入往往意味着被偷偷概括/漏掉了内容
+        if check_fidelity and len(chunk) >= 200 and len(out) < len(chunk) * 0.5:
+            warnings.append(
+                f"第 {i+1}/{len(chunks)} 块：输出字数仅为输入的 "
+                f"{len(out)/len(chunk):.0%}，可能有内容被压缩，建议开高保真模式重试。"
+            )
+    return {"result": "\n\n".join(results), "chunks": len(chunks), "warnings": warnings}
 
 
-async def process_summary(text: str) -> dict:
+async def process_summary(text: str, max_chars: int) -> dict:
     """总结：先对每块各自提要点（map），再汇总成稿（reduce）。"""
-    chunks = split_into_chunks(text)
+    chunks = split_into_chunks(text, max_chars)
     if len(chunks) <= 1:
         # 短文直接出结构化总结
         out = await deepseek_chat(PROMPT_SUMMARY_REDUCE,
@@ -248,17 +280,22 @@ async def api_process(
     text: str = Body(..., embed=True),
     mode: str = Body(..., embed=True),
     target_lang: str = Body("英文", embed=True),
+    high_fidelity: bool = Body(False, embed=True),
 ):
     text = (text or "").strip()
     if not text:
         return JSONResponse(status_code=400, content={"error": "请先提供逐字稿文本。"})
+    # 高保真模式用更小的块，换更高的忠实度（更慢、更费）
+    max_chars = HIFI_CHUNK_CHARS if high_fidelity else CHUNK_CHARS
     try:
         if mode == "polish":
-            return await process_polish_or_translate(text, PROMPT_POLISH)
+            return await process_polish_or_translate(text, PROMPT_POLISH, max_chars,
+                                                     check_fidelity=True)
         elif mode == "summarize":
-            return await process_summary(text)
+            return await process_summary(text, max_chars)
         elif mode == "translate":
-            return await process_polish_or_translate(text, prompt_translate(target_lang))
+            return await process_polish_or_translate(
+                text, prompt_translate(target_lang), max_chars)
         else:
             return JSONResponse(status_code=400, content={"error": f"未知操作：{mode}"})
     except Exception as e:

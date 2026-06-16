@@ -89,6 +89,9 @@
         <option>英文</option><option>中文</option><option>日文</option>
         <option>韩文</option><option>法文</option><option>德文</option>
       </select>
+      <label style="font-size:13px;color:var(--mut);display:flex;align-items:center;gap:6px;cursor:pointer;">
+        <input type="checkbox" id="hifi" /> 高保真（更小块、更准、更慢，适合硬核内容）
+      </label>
     </div>
     <div class="spinner" id="spinPr">⏳ 处理中（长稿会自动分段，逐块处理，请稍候）…</div>
     <div class="err" id="errPr"></div>
@@ -155,11 +158,14 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=async ()=>{
   document.querySelectorAll("[data-mode]").forEach(x=>x.disabled=true);
   try{
     const r=await fetch("/api/process",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({text, mode, target_lang:$("#lang").value})});
+      body:JSON.stringify({text, mode, target_lang:$("#lang").value, high_fidelity:$("#hifi").checked})});
     const d=await r.json();
     if(d.error){ $("#errPr").textContent=d.error; }
     else { lastResult=d.result; $("#result").textContent=d.result;
-           $("#result").classList.remove("hint"); }
+           $("#result").classList.remove("hint");
+           if(d.warnings && d.warnings.length){
+             $("#errPr").innerHTML="⚠️ 完整度提醒：<br>"+d.warnings.join("<br>");
+           } }
   }catch(e){ $("#errPr").textContent="请求失败："+e; }
   $("#spinPr").style.display="none";
   document.querySelectorAll("[data-mode]").forEach(x=>x.disabled=false);
