@@ -93,6 +93,14 @@
         <input type="checkbox" id="hifi" /> 高保真（更小块、更准、更慢，适合硬核内容）
       </label>
     </div>
+    <div class="row" style="margin-top:10px;">
+      <span class="hint" style="margin:0;">书面化风格：</span>
+      <select id="style">
+        <option value="faithful">贴近原话（保留例子与口吻）</option>
+        <option value="readable">深度可读（像一篇文章，带小标题）</option>
+        <option value="concise">精炼留干货（紧凑但不丢信息）</option>
+      </select>
+    </div>
     <div class="spinner" id="spinPr">⏳ 处理中（长稿会自动分段，逐块处理，请稍候）…</div>
     <div class="err" id="errPr"></div>
   </div>
@@ -154,20 +162,35 @@ document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=async ()=>{
   $("#errPr").textContent="";
   if(!text){ $("#errPr").textContent="请先在第 2 步提供逐字稿。"; return; }
   const mode=b.dataset.mode; lastMode=mode;
-  $("#spinPr").style.display="block";
+  const spin=$("#spinPr"); spin.style.display="block"; spin.textContent="⏳ 准备中…";
   document.querySelectorAll("[data-mode]").forEach(x=>x.disabled=true);
   try{
     const r=await fetch("/api/process",{method:"POST",headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({text, mode, target_lang:$("#lang").value, high_fidelity:$("#hifi").checked})});
-    const d=await r.json();
-    if(d.error){ $("#errPr").textContent=d.error; }
-    else { lastResult=d.result; $("#result").textContent=d.result;
-           $("#result").classList.remove("hint");
-           if(d.warnings && d.warnings.length){
-             $("#errPr").innerHTML="⚠️ 完整度提醒：<br>"+d.warnings.join("<br>");
-           } }
+      body:JSON.stringify({text, mode, target_lang:$("#lang").value,
+        high_fidelity:$("#hifi").checked, style:$("#style").value})});
+    // 边读边显示进度（NDJSON：每行一个事件）
+    const reader=r.body.getReader(); const dec=new TextDecoder(); let buf="";
+    while(true){
+      const {done,value}=await reader.read(); if(done) break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split("\n"); buf=lines.pop();
+      for(const line of lines){
+        if(!line.trim()) continue;
+        const ev=JSON.parse(line);
+        if(ev.type==="start"){ spin.textContent=`⏳ 共 ${ev.total} 块，开始处理…`; }
+        else if(ev.type==="progress"){
+          const pct=Math.round(ev.done/ev.total*100);
+          spin.textContent=`⏳ ${ev.label}（${pct}%）`;
+        }
+        else if(ev.type==="done"){
+          lastResult=ev.result; $("#result").textContent=ev.result; $("#result").classList.remove("hint");
+          if(ev.warnings && ev.warnings.length){ $("#errPr").innerHTML="⚠️ 完整度提醒：<br>"+ev.warnings.join("<br>"); }
+        }
+        else if(ev.type==="error"){ $("#errPr").textContent=ev.error; }
+      }
+    }
   }catch(e){ $("#errPr").textContent="请求失败："+e; }
-  $("#spinPr").style.display="none";
+  spin.style.display="none";
   document.querySelectorAll("[data-mode]").forEach(x=>x.disabled=false);
 });
 

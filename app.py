@@ -12,13 +12,14 @@ Hipodcast MVP —— 播客逐字稿 AI 加工工具（Web 验证版）
 
 import os
 import re
+import json
 import time
 import asyncio
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Body
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -114,12 +115,30 @@ async def deepseek_chat(system_prompt: str, user_content: str) -> str:
 # --------------------------------------------------------------------------
 # 提示词
 # --------------------------------------------------------------------------
-PROMPT_POLISH = (
-    "你是一名专业的中文文字编辑。下面是一段播客口语逐字稿，可能含口头禅、重复、语气词、"
-    "口误。请把它改写成书面化、通顺、易读的文字：去掉语气词和无意义重复，理顺语序，"
-    "适当分段。要求：忠实保留原意和所有信息点，不要遗漏、不要自行添加观点、不要做总结。"
-    "直接输出改写后的正文，不要任何前后说明。"
-)
+# 书面化的核心提示词 —— 这是产品的灵魂，所有规则都为"忠实完整 + 干净可读"服务。
+PROMPT_POLISH_BASE = """你是一名顶尖的播客文字整理编辑。任务：把下面这段口语逐字稿整理成高质量的书面文本，供人阅读、或交给 AI 做进一步分析。
+
+【铁律 · 必须遵守】
+1. 忠实第一：完整保留原文所有信息点、观点、论证、事实、数字、案例、人名与专有名词。绝不删减、绝不概括成摘要、绝不添加原文没有的内容或你自己的评论。
+2. 去口语噪音：删掉语气词与口头禅（嗯、啊、那个、就是说、对吧）、无意义重复、说了一半又重来的开头、明显的卡顿。
+3. 修顺不改意：在不改变原意的前提下，理顺语序、补全被省略的成分、合并破碎的短句，使其读起来是完整通顺的书面句子。
+4. 纠错有度：结合上下文修正语音识别明显的同音错别字（如"原理"误作"愿意"）；若某处实在拿不准，保留原词并在其后标注 [?]，不要臆造。
+5. 结构化：合理分段；当话题明显切换时，可加一个简短小标题（用 Markdown 的 ## ）分节。
+6. 保留"人味"：维持说话人的第一人称视角、语气和个人风格，不要改写成冷冰冰的第三方转述。
+
+直接输出整理后的正文，不要任何开场白、说明或结尾总结。"""
+
+# 三种风格，按需追加到铁律之后
+POLISH_STYLES = {
+    "faithful": "【风格】贴近原话：在书面化的同时最大程度保留原有的表达方式、口吻和具体例子。",
+    "readable": "【风格】深度可读：在不丢任何信息的前提下，让行文更像一篇结构清晰、逻辑连贯的文章——多用小标题、适当补充过渡句。",
+    "concise": "【风格】精炼留干货：在不丢失任何信息点的前提下，表达尽量紧凑，去掉铺垫和啰嗦，但不得删除实质内容。",
+}
+
+
+def prompt_polish(style: str = "faithful") -> str:
+    extra = POLISH_STYLES.get(style, POLISH_STYLES["faithful"])
+    return PROMPT_POLISH_BASE + "\n\n" + extra
 
 PROMPT_SUMMARY_MAP = (
     "请阅读下面这段内容，用简洁的要点列表（3-6 条）概括其核心信息，"
@@ -145,49 +164,65 @@ def prompt_translate(target_lang: str) -> str:
 # --------------------------------------------------------------------------
 # 核心：分段加工
 # --------------------------------------------------------------------------
-async def process_polish_or_translate(
-    text: str, system_prompt: str, max_chars: int, check_fidelity: bool = False
-) -> dict:
-    """书面化 / 翻译：逐块处理，带上一块结尾做衔接，再拼接。
-    check_fidelity=True 时（书面化）顺便比对每块输入/输出字数，疑似漏内容就警告。"""
-    chunks = split_into_chunks(text, max_chars)
-    results = []
-    warnings = []
-    prev_tail = ""
-    for i, chunk in enumerate(chunks):
-        if prev_tail:
-            user_content = (
-                f"【前文结尾，仅供衔接参考，不要重复输出】\n{prev_tail}\n\n"
-                f"【需要处理的正文】\n{chunk}"
-            )
-        else:
-            user_content = chunk
-        out = await deepseek_chat(system_prompt, user_content)
-        results.append(out)
-        prev_tail = out[-CONTEXT_TAIL:]
-        # 书面化是 1:1 改写，输出明显短于输入往往意味着被偷偷概括/漏掉了内容
-        if check_fidelity and len(chunk) >= 200 and len(out) < len(chunk) * 0.5:
-            warnings.append(
-                f"第 {i+1}/{len(chunks)} 块：输出字数仅为输入的 "
-                f"{len(out)/len(chunk):.0%}，可能有内容被压缩，建议开高保真模式重试。"
-            )
-    return {"result": "\n\n".join(results), "chunks": len(chunks), "warnings": warnings}
+async def run_process(text, mode, target_lang, high_fidelity, style):
+    """统一的分段处理。这是个异步生成器，逐步 yield 进度事件：
+        {"type":"start","total":N}
+        {"type":"progress","done":k,"total":N,"label":"..."}
+        {"type":"done","result":...,"chunks":N,"warnings":[...]}
+    这样前端就能实时显示"第 k/N 块"。"""
+    max_chars = HIFI_CHUNK_CHARS if high_fidelity else CHUNK_CHARS
 
+    if mode in ("polish", "translate"):
+        system_prompt = prompt_polish(style) if mode == "polish" else prompt_translate(target_lang)
+        check_fidelity = mode == "polish"
+        chunks = split_into_chunks(text, max_chars)
+        total = len(chunks)
+        yield {"type": "start", "total": total}
+        results, warnings, prev_tail = [], [], ""
+        for i, chunk in enumerate(chunks):
+            if prev_tail:
+                user_content = (
+                    f"【前文结尾，仅供衔接参考，不要重复输出】\n{prev_tail}\n\n"
+                    f"【需要处理的正文】\n{chunk}"
+                )
+            else:
+                user_content = chunk
+            out = await deepseek_chat(system_prompt, user_content)
+            results.append(out)
+            prev_tail = out[-CONTEXT_TAIL:]
+            if check_fidelity and len(chunk) >= 200 and len(out) < len(chunk) * 0.5:
+                warnings.append(
+                    f"第 {i+1}/{total} 块：输出字数仅为输入的 {len(out)/len(chunk):.0%}，"
+                    "可能有内容被压缩，建议开高保真模式重试。"
+                )
+            yield {"type": "progress", "done": i + 1, "total": total,
+                   "label": f"精修中… 第 {i+1}/{total} 块"}
+        yield {"type": "done", "result": "\n\n".join(results),
+               "chunks": total, "warnings": warnings}
 
-async def process_summary(text: str, max_chars: int) -> dict:
-    """总结：先对每块各自提要点（map），再汇总成稿（reduce）。"""
-    chunks = split_into_chunks(text, max_chars)
-    if len(chunks) <= 1:
-        # 短文直接出结构化总结
-        out = await deepseek_chat(PROMPT_SUMMARY_REDUCE,
-                                  "请直接对下面内容做结构化总结：\n\n" + text)
-        return {"result": out, "chunks": len(chunks)}
-    partials = []
-    for chunk in chunks:
-        partials.append(await deepseek_chat(PROMPT_SUMMARY_MAP, chunk))
-    merged = "\n\n".join(f"【第 {i+1} 部分要点】\n{p}" for i, p in enumerate(partials))
-    final = await deepseek_chat(PROMPT_SUMMARY_REDUCE, merged)
-    return {"result": final, "chunks": len(chunks)}
+    elif mode == "summarize":
+        chunks = split_into_chunks(text, max_chars)
+        if len(chunks) <= 1:
+            yield {"type": "start", "total": 1}
+            out = await deepseek_chat(PROMPT_SUMMARY_REDUCE,
+                                      "请直接对下面内容做结构化总结：\n\n" + text)
+            yield {"type": "progress", "done": 1, "total": 1, "label": "总结中…"}
+            yield {"type": "done", "result": out, "chunks": 1, "warnings": []}
+            return
+        total = len(chunks) + 1  # 各块提要点 + 最后汇总
+        yield {"type": "start", "total": total}
+        partials = []
+        for i, chunk in enumerate(chunks):
+            partials.append(await deepseek_chat(PROMPT_SUMMARY_MAP, chunk))
+            yield {"type": "progress", "done": i + 1, "total": total,
+                   "label": f"提炼要点… 第 {i+1}/{len(chunks)} 块"}
+        merged = "\n\n".join(f"【第 {i+1} 部分要点】\n{p}" for i, p in enumerate(partials))
+        final = await deepseek_chat(PROMPT_SUMMARY_REDUCE, merged)
+        yield {"type": "progress", "done": total, "total": total, "label": "汇总成稿…"}
+        yield {"type": "done", "result": final, "chunks": len(chunks), "warnings": []}
+
+    else:
+        raise RuntimeError(f"未知操作：{mode}")
 
 
 # --------------------------------------------------------------------------
@@ -281,25 +316,22 @@ async def api_process(
     mode: str = Body(..., embed=True),
     target_lang: str = Body("英文", embed=True),
     high_fidelity: bool = Body(False, embed=True),
+    style: str = Body("faithful", embed=True),
 ):
+    """流式处理：以 NDJSON（每行一个 JSON）逐步返回进度，最后一行是结果。
+    前端边读边显示『第 k/N 块』。"""
     text = (text or "").strip()
     if not text:
         return JSONResponse(status_code=400, content={"error": "请先提供逐字稿文本。"})
-    # 高保真模式用更小的块，换更高的忠实度（更慢、更费）
-    max_chars = HIFI_CHUNK_CHARS if high_fidelity else CHUNK_CHARS
-    try:
-        if mode == "polish":
-            return await process_polish_or_translate(text, PROMPT_POLISH, max_chars,
-                                                     check_fidelity=True)
-        elif mode == "summarize":
-            return await process_summary(text, max_chars)
-        elif mode == "translate":
-            return await process_polish_or_translate(
-                text, prompt_translate(target_lang), max_chars)
-        else:
-            return JSONResponse(status_code=400, content={"error": f"未知操作：{mode}"})
-    except Exception as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    async def gen():
+        try:
+            async for ev in run_process(text, mode, target_lang, high_fidelity, style):
+                yield json.dumps(ev, ensure_ascii=False) + "\n"
+        except Exception as e:
+            yield json.dumps({"type": "error", "error": str(e)}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.get("/")
