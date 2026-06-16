@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Hipodcast · 播客逐字稿 AI 加工</title>
+<style>
+  :root { --bg:#0f1115; --card:#191c23; --line:#2a2f3a; --fg:#e8eaf0; --mut:#8b93a7; --acc:#5b8cff; --acc2:#2f3a57; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--fg); line-height:1.65; }
+  header { padding:22px 18px 8px; max-width:880px; margin:0 auto; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--mut); font-size:13px; }
+  main { max-width:880px; margin:0 auto; padding:12px 18px 60px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:16px; margin:14px 0; }
+  .step { font-size:13px; color:var(--acc); font-weight:600; margin-bottom:10px; letter-spacing:.5px; }
+  textarea { width:100%; min-height:130px; resize:vertical; background:#0c0e13; color:var(--fg);
+             border:1px solid var(--line); border-radius:10px; padding:12px; font-size:14px; line-height:1.6; }
+  input[type=text] { width:100%; background:#0c0e13; color:var(--fg); border:1px solid var(--line);
+             border-radius:10px; padding:11px 12px; font-size:14px; }
+  .tabs { display:flex; gap:8px; margin-bottom:12px; }
+  .tab { padding:7px 14px; border-radius:999px; border:1px solid var(--line); background:transparent;
+         color:var(--mut); cursor:pointer; font-size:13px; }
+  .tab.active { background:var(--acc2); color:#fff; border-color:var(--acc); }
+  .row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  button.act { padding:10px 16px; border-radius:10px; border:none; cursor:pointer; font-size:14px; font-weight:600; }
+  .primary { background:var(--acc); color:#fff; }
+  .ghost { background:transparent; border:1px solid var(--line); color:var(--fg); }
+  .ghost:hover { border-color:var(--acc); }
+  select { background:#0c0e13; color:var(--fg); border:1px solid var(--line); border-radius:10px; padding:9px; font-size:14px; }
+  .hint { font-size:12.5px; color:var(--mut); margin-top:8px; }
+  .badge { font-size:11.5px; padding:2px 8px; border-radius:999px; margin-left:8px; }
+  .ok { background:#16351f; color:#79e09a; }
+  .no { background:#3a1f23; color:#ff9aa6; }
+  #result { white-space:pre-wrap; word-break:break-word; }
+  .spinner { display:none; font-size:13px; color:var(--acc); margin-top:10px; }
+  .err { color:#ff9aa6; font-size:13px; margin-top:8px; }
+  .hide { display:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎙️ Hipodcast <span class="sub">逐字稿 → 书面化 / 总结 / 翻译 → 导出 Markdown</span></h1>
+  <div class="sub" style="margin-top:6px;">
+    DeepSeek <span id="b-ds" class="badge no">检测中</span>
+    阿里云转写 <span id="b-dash" class="badge no">检测中</span>
+  </div>
+</header>
+
+<main>
+  <!-- 第 1 步：来源 -->
+  <div class="card">
+    <div class="step">第 1 步 · 来源</div>
+    <div class="tabs">
+      <button class="tab active" data-tab="paste">粘贴文字稿</button>
+      <button class="tab" data-tab="audio">音频链接转写</button>
+    </div>
+    <div id="tab-paste">
+      <div class="hint">先随便找一段文字（任意逐字稿/文章）粘进下面的「逐字稿」框即可体验。</div>
+    </div>
+    <div id="tab-audio" class="hide">
+      <input type="text" id="audioUrl" placeholder="粘贴音频/播客单集的 mp3 链接，例如 https://.../episode.mp3" />
+      <div class="row" style="margin-top:10px;">
+        <button class="act primary" id="btnTranscribe">开始转写</button>
+        <span class="hint" style="margin:0;">需要阿里云转写 key；长音频可能要等几分钟。</span>
+      </div>
+      <div class="spinner" id="spinTr">⏳ 转写中，长音频请耐心等待…</div>
+      <div class="err" id="errTr"></div>
+    </div>
+  </div>
+
+  <!-- 第 2 步：逐字稿 -->
+  <div class="card">
+    <div class="step">第 2 步 · 逐字稿（可手动编辑）</div>
+    <textarea id="transcript" placeholder="转写结果会出现在这里；也可以直接粘贴文字。"></textarea>
+    <div class="hint" id="trCount">字数：0</div>
+  </div>
+
+  <!-- 第 3 步：AI 加工 -->
+  <div class="card">
+    <div class="step">第 3 步 · AI 加工</div>
+    <div class="row">
+      <button class="act primary" data-mode="polish">书面化改写</button>
+      <button class="act primary" data-mode="summarize">提炼总结</button>
+      <button class="act primary" data-mode="translate">翻译为</button>
+      <select id="lang">
+        <option>英文</option><option>中文</option><option>日文</option>
+        <option>韩文</option><option>法文</option><option>德文</option>
+      </select>
+    </div>
+    <div class="spinner" id="spinPr">⏳ 处理中（长稿会自动分段，逐块处理，请稍候）…</div>
+    <div class="err" id="errPr"></div>
+  </div>
+
+  <!-- 第 4 步：结果与导出 -->
+  <div class="card">
+    <div class="step">第 4 步 · 结果与导出</div>
+    <div id="result" class="hint">结果会显示在这里。</div>
+    <div class="row" style="margin-top:14px;">
+      <button class="act ghost" id="btnCopy">复制</button>
+      <button class="act ghost" id="btnExport">导出 Markdown</button>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+let lastResult = "", lastMode = "";
+
+// 配置就绪状态
+fetch("/api/config").then(r=>r.json()).then(c=>{
+  const ds=$("#b-ds"), dash=$("#b-dash");
+  ds.textContent = c.deepseek_ready ? "已就绪" : "未配置";
+  ds.className = "badge " + (c.deepseek_ready?"ok":"no");
+  dash.textContent = c.dashscope_ready ? "已就绪" : "未配置";
+  dash.className = "badge " + (c.dashscope_ready?"ok":"no");
+});
+
+// tab 切换
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+  document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+  t.classList.add("active");
+  const v=t.dataset.tab;
+  $("#tab-paste").classList.toggle("hide", v!=="paste");
+  $("#tab-audio").classList.toggle("hide", v!=="audio");
+});
+
+// 字数统计
+$("#transcript").addEventListener("input", ()=> $("#trCount").textContent="字数："+$("#transcript").value.length);
+
+// 转写
+$("#btnTranscribe").onclick = async ()=>{
+  const url=$("#audioUrl").value.trim();
+  $("#errTr").textContent="";
+  if(!url){ $("#errTr").textContent="请先填音频链接。"; return; }
+  $("#spinTr").style.display="block"; $("#btnTranscribe").disabled=true;
+  try{
+    const r=await fetch("/api/transcribe",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({audio_url:url})});
+    const d=await r.json();
+    if(d.error){ $("#errTr").textContent=d.error; }
+    else { $("#transcript").value=d.transcript; $("#trCount").textContent="字数："+d.transcript.length; }
+  }catch(e){ $("#errTr").textContent="请求失败："+e; }
+  $("#spinTr").style.display="none"; $("#btnTranscribe").disabled=false;
+};
+
+// AI 加工
+document.querySelectorAll("[data-mode]").forEach(b=>b.onclick=async ()=>{
+  const text=$("#transcript").value.trim();
+  $("#errPr").textContent="";
+  if(!text){ $("#errPr").textContent="请先在第 2 步提供逐字稿。"; return; }
+  const mode=b.dataset.mode; lastMode=mode;
+  $("#spinPr").style.display="block";
+  document.querySelectorAll("[data-mode]").forEach(x=>x.disabled=true);
+  try{
+    const r=await fetch("/api/process",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({text, mode, target_lang:$("#lang").value})});
+    const d=await r.json();
+    if(d.error){ $("#errPr").textContent=d.error; }
+    else { lastResult=d.result; $("#result").textContent=d.result;
+           $("#result").classList.remove("hint"); }
+  }catch(e){ $("#errPr").textContent="请求失败："+e; }
+  $("#spinPr").style.display="none";
+  document.querySelectorAll("[data-mode]").forEach(x=>x.disabled=false);
+});
+
+// 复制
+$("#btnCopy").onclick=()=>{ if(lastResult){ navigator.clipboard.writeText(lastResult); $("#btnCopy").textContent="已复制 ✓"; setTimeout(()=>$("#btnCopy").textContent="复制",1500);} };
+
+// 导出 Markdown
+$("#btnExport").onclick=()=>{
+  if(!lastResult){ alert("还没有结果可导出。"); return; }
+  const titleMap={polish:"书面化稿",summarize:"内容总结",translate:"翻译稿"};
+  const md = `# ${titleMap[lastMode]||"Hipodcast 导出"}\n\n> 由 Hipodcast 生成 · ${new Date().toLocaleString()}\n\n${lastResult}\n`;
+  const blob=new Blob([md],{type:"text/markdown"});
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(blob);
+  a.download=`hipodcast-${lastMode}-${Date.now()}.md`;
+  a.click();
+};
+</script>
+</body>
+</html>
