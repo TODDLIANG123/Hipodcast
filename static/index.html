@@ -58,7 +58,12 @@
       <button class="tab" data-tab="audio">音频链接转写</button>
     </div>
     <div id="tab-paste">
-      <div class="hint">先随便找一段文字（任意逐字稿/文章）粘进下面的「逐字稿」框即可体验。</div>
+      <div class="hint">粘贴任意文字到下面的「逐字稿」框，或直接选一个本地文件载入：</div>
+      <div class="row" style="margin-top:10px;">
+        <label class="act ghost" for="fileInput" style="cursor:pointer;">📄 选择本地文件</label>
+        <input type="file" id="fileInput" accept=".md,.txt,.srt,.vtt,text/plain" style="display:none;" />
+        <span class="hint" id="fileName" style="margin:0;">支持 .md / .txt / .srt / .vtt</span>
+      </div>
     </div>
     <div id="tab-audio" class="hide">
       <input type="text" id="audioUrl" placeholder="粘贴音频/播客单集的 mp3 链接，例如 https://.../episode.mp3" />
@@ -139,6 +144,23 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
 
 // 字数统计
 $("#transcript").addEventListener("input", ()=> $("#trCount").textContent="字数："+$("#transcript").value.length);
+
+// 载入本地文件（纯浏览器读取，文件不会上传到任何服务器）
+$("#fileInput").addEventListener("change", e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    let txt=reader.result;
+    // .srt/.vtt 字幕：去掉时间轴和序号行，只留文字
+    if(/\.(srt|vtt)$/i.test(file.name)){
+      txt=txt.split(/\r?\n/).filter(l=>!/^\d+$/.test(l.trim()) && !/-->/.test(l) && l.trim()!=="WEBVTT").join("\n");
+    }
+    $("#transcript").value=txt.trim();
+    $("#trCount").textContent="字数："+$("#transcript").value.length;
+    $("#fileName").textContent="已载入："+file.name+"（"+$("#transcript").value.length+" 字）";
+  };
+  reader.readAsText(file,"utf-8");
+});
 
 // 转写
 $("#btnTranscribe").onclick = async ()=>{
