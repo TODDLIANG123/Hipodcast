@@ -123,7 +123,7 @@ PROMPT_POLISH_BASE = """你是一名顶尖的播客文字整理编辑。任务�
 2. 去口语噪音：删掉语气词与口头禅（嗯、啊、那个、就是说、对吧）、无意义重复、说了一半又重来的开头、明显的卡顿。
 3. 修顺不改意：在不改变原意的前提下，理顺语序、补全被省略的成分、合并破碎的短句，使其读起来是完整通顺的书面句子。
 4. 纠错有度：结合上下文修正语音识别明显的同音错别字（如"原理"误作"愿意"）；若某处实在拿不准，保留原词并在其后标注 [?]，不要臆造。
-5. 结构化：合理分段；当话题明显切换时，可加一个简短小标题（用 Markdown 的 ## ）分节。
+5. 结构化：合理分段；在话题明显切换处加一个简短小标题（用 Markdown 的 ## ）分节；若内容是多人对话或访谈，请用简洁的说话人标记区分不同发言人（如『主持人』『嘉宾』或其姓名），每次发言另起一段。
 6. 保留"人味"与表达习惯：必须保留说话人标志性的措辞、惯用词、个人化的比喻、幽默感、风格化的口头表达、句式节奏和第一人称视角。只清除"无意义的语流噪音"（纯填充词、结巴、说错重来），不要把带个人风格的表达一并抹平，更不要替换成更"标准"却更平庸的说法。判断标准：去掉它读起来更顺且不损失风格 → 去；去掉它就少了"那个人的味道" → 留。
 
 直接输出整理后的正文，不要任何开场白、说明或结尾总结。"""
@@ -135,9 +135,41 @@ POLISH_STYLES = {
 }
 
 
+def load_glossary() -> str:
+    """读取 glossary.txt，生成一段『术语纠正表』提示词；没有文件就返回空串。"""
+    path = os.path.join(os.path.dirname(__file__), "glossary.txt")
+    if not os.path.exists(path):
+        return ""
+    terms, mappings = [], []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            m = re.split(r"\s*(?:=>|→)\s*", line, maxsplit=1)
+            if len(m) == 2 and m[0] and m[1]:
+                mappings.append(f"{m[0]}→{m[1]}")
+            else:
+                terms.append(line)
+    if not terms and not mappings:
+        return ""
+    parts = ["【术语纠正表】下面是该领域的正确写法。逐字稿中若出现与这些词同音或近音的错误转写，请改成正确写法；表中没有、又确实拿不准的，保留原词并在其后标注 [?]。"]
+    if terms:
+        parts.append("正确术语：" + "、".join(terms))
+    if mappings:
+        parts.append("明确对应：" + "；".join(mappings))
+    return "\n".join(parts)
+
+
+GLOSSARY_PROMPT = load_glossary()
+
+
 def prompt_polish(style: str = "voiced") -> str:
     extra = POLISH_STYLES.get(style, POLISH_STYLES["voiced"])
-    return PROMPT_POLISH_BASE + "\n\n" + extra
+    blocks = [PROMPT_POLISH_BASE, extra]
+    if GLOSSARY_PROMPT:
+        blocks.append(GLOSSARY_PROMPT)
+    return "\n\n".join(blocks)
 
 PROMPT_SUMMARY_MAP = (
     "请阅读下面这段内容，用简洁的要点列表（3-6 条）概括其核心信息，"

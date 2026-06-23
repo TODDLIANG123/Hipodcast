@@ -1,0 +1,40 @@
+# 术语纠正表 —— 书面化时会照这张表纠正语音识别的同音/近音错误
+#
+# 用法（每行一条）：
+#   1) 直接写正确词：       逐字稿里出现它的同音/近音错写，会被纠正过来
+#   2) 写明确对应关系：     错误写法 => 正确写法
+#   以 # 开头的行是注释，会被忽略。
+#
+# 这是默认的 AI 领域词表，请按你关心的领域自由增删。
+
+# ——— 公司 / 产品 / 模型 ———
+Anthropic
+Claude
+Claude Code
+Cursor
+Composer
+OpenAI
+Codex
+Google DeepMind
+Gemini
+Manus
+Midjourney
+DeepSeek
+
+# ——— 评测 / 术语 ———
+SWE-bench
+AIME
+IMO
+benchmark
+scaling law
+agent
+
+# ——— 明确对应（错写 => 正确）———
+OpenEye => OpenAI
+Mines => Manus
+Mita => Meta
+Sweepbench => SWE-bench
+AME => AIME
+AMO => IMO
+CloudCode => Claude Code
+Curse => Cursor
