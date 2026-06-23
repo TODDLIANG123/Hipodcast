@@ -87,10 +87,10 @@
       </div>
     </div>
     <div id="tab-audio" class="hide">
-      <input type="text" id="audioUrl" placeholder="粘贴音频/播客单集的 mp3 链接，例如 https://.../episode.mp3" />
+      <input type="text" id="audioUrl" placeholder="粘贴播客单集网页链接（如小宇宙 xiaoyuzhoufm.com/episode/…）或音频直链(.mp3/.m4a)" />
       <div class="row" style="margin-top:10px;">
         <button class="act primary" id="btnTranscribe">开始转写</button>
-        <span class="hint" style="margin:0;">需要阿里云转写 key；长音频可能要等几分钟。</span>
+        <span class="hint" style="margin:0;">会自动从网页里找出音频；需要阿里云转写 key，长音频可能要等几分钟。</span>
       </div>
       <div class="spinner" id="spinTr">⏳ 转写中，长音频请耐心等待…</div>
       <div class="err" id="errTr"></div>

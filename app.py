@@ -264,6 +264,43 @@ DASHSCOPE_SUBMIT = (
 )
 DASHSCOPE_TASK = "https://dashscope.aliyuncs.com/api/v1/tasks/{task_id}"
 
+AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg", ".opus", ".amr", ".wma")
+_BROWSER_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+
+
+async def resolve_audio_url(url: str) -> str:
+    """把『播客网页链接』解析成真正的音频文件链接。
+    若本身就是音频文件直链则原样返回；否则抓取网页、从 og:audio 等处提取音频地址。"""
+    url = url.strip()
+    low = url.split("?")[0].lower()
+    if low.endswith(AUDIO_EXTS):
+        return url
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True,
+                                     headers={"User-Agent": _BROWSER_UA}) as client:
+            r = await client.get(url)
+            html = r.text
+    except Exception as e:
+        raise RuntimeError(f"无法打开这个网页链接（{type(e).__name__}）。可以直接粘贴音频文件(.mp3/.m4a)的链接。")
+
+    # 1) 标准 og:audio 标签（小宇宙等大量播客站点都有）
+    patterns = [
+        r'property=["\']og:audio["\'][^>]*content=["\']([^"\']+)["\']',
+        r'content=["\']([^"\']+)["\'][^>]*property=["\']og:audio["\']',
+        r'name=["\']twitter:player:stream["\'][^>]*content=["\']([^"\']+)["\']',
+        # 2) 兜底：直接搜音频 CDN 直链
+        r'(https?://[^"\'\s\\]+\.(?:m4a|mp3|aac|wav|flac|ogg|opus|m3u8))',
+    ]
+    for pat in patterns:
+        m = re.search(pat, html, re.IGNORECASE)
+        if m:
+            found = m.group(1).replace("&amp;", "&").strip()
+            if found.startswith("http"):
+                return found
+    raise RuntimeError(
+        "没能从这个网页里找到音频地址。请打开播客单集页，复制其中音频文件(.mp3/.m4a)的直链再试。"
+    )
+
 
 async def transcribe_audio_url(audio_url: str) -> dict:
     if not DASHSCOPE_API_KEY:
@@ -272,6 +309,8 @@ async def transcribe_audio_url(audio_url: str) -> dict:
             "你可以先用『粘贴文字稿』那一栏体验 AI 加工；"
             "想用音频转写，请申请阿里云 DashScope key 并填进 .env。"
         )
+    # 网页链接 -> 真实音频直链
+    audio_url = await resolve_audio_url(audio_url)
     headers = {
         "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
         "Content-Type": "application/json",
@@ -302,7 +341,8 @@ async def transcribe_audio_url(audio_url: str) -> dict:
                 if not results or "transcription_url" not in results[0]:
                     raise RuntimeError("转写完成但未返回结果链接。")
                 tr = await client.get(results[0]["transcription_url"])
-                return {"transcript": _extract_transcript_text(tr.json())}
+                return {"transcript": _extract_transcript_text(tr.json()),
+                        "resolved_url": audio_url}
             if status == "FAILED":
                 raise RuntimeError(f"转写任务失败：{out.get('message', out)}")
         raise RuntimeError("转写超时（音频可能过长），请稍后重试或换更短的音频。")
