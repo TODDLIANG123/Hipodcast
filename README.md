@@ -45,7 +45,18 @@ Sweepbench => SWE-bench # 或写明确对应：错写 => 正确
 
 ---
 
-## 怎么跑起来（傻瓜步骤）
+## 最简单：双击启动（macOS）
+
+下载代码后，在 Finder 里**双击 `start.command`** 即可——它会自动建环境、装依赖、开浏览器、启动服务。
+
+- 第一次双击若提示"无法打开（来自身份不明的开发者）"：右键点 `start.command` → 选「打开」→ 再点「打开」，之后就能直接双击了。
+- 第一次运行会自动生成 `.env` 并打开，填好 key 保存，再双击一次即可。
+
+> 想放到桌面/程序坞：右键 `start.command` →「制作替身」，把替身拖到桌面即可。
+
+---
+
+## 手动跑（或非 macOS）
 
 ### 1. 装 Python
 到 https://www.python.org/downloads/ 下载安装（安装时勾选 **Add Python to PATH**）。
